@@ -5,31 +5,23 @@ var fs = require('fs');
 const readline = require('readline');
 const tough = require('tough-cookie');
 const FileCookieStore = require('tough-cookie-store');
+const Rx = require('@reactivex/rxjs');
 
 // const getPassengers =  require('./passenger');
-
-var cookie = new tough.Cookie({
-    key: "some_key",
-    value: "some_value",
-    domain: 'kyfw.12306.cn',
-    httpOnly: true,
-    maxAge: 31536000
-});
 
 var fileStore = new FileCookieStore("./cookies.json", {encrypt: false});
 fileStore.option = {encrypt: false};
 
 var cookiejar = request.jar(fileStore);
-// var cookiejar = new tough.CookieJar();
-// cookiejar.setCookie(cookie, "https://kyfw.12306.cn/otn/passport");
 
 var req = request.defaults({jar: cookiejar});
 
 const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.60 Safari/537.17"
-    ,"Host": "kyfw.12306.cn"
-    ,"Origin": "https://kyfw.12306.cn"
-    ,"Referer": "https://kyfw.12306.cn/otn/passport?redirect=/otn/"
+  "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+  ,"User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.60 Safari/537.17"
+  ,"Host": "kyfw.12306.cn"
+  ,"Origin": "https://kyfw.12306.cn"
+  ,"Referer": "https://kyfw.12306.cn/otn/passport?redirect=/otn/"
 };
 
 function login() {
@@ -66,12 +58,9 @@ function login() {
         getNewAppToken().then((newapptk)=> {
           console.log("This is newapptk " + newapptk);
 
-          getAppToken(newapptk).then(()=> {
-            resolve()
+          getAppTokenPromise(newapptk).then(getMy12306).then(()=> {
+            resolve();
           });
-          // resolve(newapptk);
-
-          //getMy12306();
         }, (response)=> {
           console.error("getNewAppToken error "+response.statusCode);
           captcha().then(checkCaptcha).then(auth, checkCaptcha);
@@ -202,8 +191,8 @@ function checkCaptcha() {
 function authenticate() {
   // 发送登录信息
   var data = {
-        "username": "anypossible",
-        "password": "ruby0nrails",
+        "username": "anypossiblew",
+        "password": "String0int",
         "appid": "otn"
     };
 
@@ -280,14 +269,17 @@ function getNewAppToken() {
 }
 
 function getMy12306() {
-  req({url: "https://kyfw.12306.cn/otn/index/initMy12306"
-       ,headers: headers
-       ,method: "GET"}, (error, response, body)=> {
-    if(response.statusCode === 200) {
-      console.log(body);
-      console.log(body.substr(body.indexOf("用户名"), 20));
-    }
-  })
+  return new Promise((resolve, reject)=> {
+    req({url: "https://kyfw.12306.cn/otn/index/initMy12306"
+         ,headers: headers
+         ,method: "GET"}, (error, response, body)=> {
+      if(response.statusCode === 200) {
+        return resolve();
+      }
+      reject();
+    });
+  });
+
 }
 
 /**
@@ -329,6 +321,26 @@ function getAppToken(newapptk) {
   });
 }
 
+function getAppTokenPromise(newapptk) {
+
+  var subjectGetAppToken = new Rx.Subject();
+
+  return new Promise((resolve, reject) => {
+
+    subjectGetAppToken.subscribe(newapptk => {
+      getAppToken(newapptk).then(x => {
+        resolve(x);
+      }, error=> {
+        subjectGetAppToken.next(newapptk);
+      });
+    });
+
+    subjectGetAppToken.next(newapptk);
+  });
+}
+
+
+
 function getPassengers(token) {
   var url = "https://kyfw.12306.cn/otn/confirmPassenger/getPassengerDTOs";
 
@@ -363,7 +375,7 @@ function getPassengers(token) {
 
 function queryLeftTicket() {
   var query = {
-    "leftTicketDTO.train_date": "2018-01-28"
+    "leftTicketDTO.train_date": "2018-01-31"
     ,"leftTicketDTO.from_station":"SHH"
     ,"leftTicketDTO.to_station":"UUH"
     ,"purpose_codes": "ADULT"
@@ -380,7 +392,7 @@ function queryLeftTicket() {
       // console.log(body);
       if(response.statusCode === 200) {
         if(!body) {
-          return reject(err);
+          return reject(response.statusCode);
         }
         if(body.indexOf("请您重试一下") > 0) {
           reject("系统繁忙!");
@@ -401,12 +413,58 @@ function queryLeftTicket() {
 
 }
 
+function leftTicketInit() {
+  var url = "https://kyfw.12306.cn/otn/leftTicket/init";
+
+  return new Promise((resolve, reject)=> {
+    req(url, (error, response, body)=> {
+      if(error) throw error;
+
+      if(response.statusCode === 200) {
+        return resolve();
+      }
+      reject(response.statusText);
+    });
+  });
+}
+
+function checkUser() {
+  var url = "https://kyfw.12306.cn/otn/login/checkUser";
+
+  var data = {
+    "_json_att": ""
+  };
+
+  var headers = Object.assign({}, headers);
+  headers = Object.assign(headers, {
+    "Referer": "https://kyfw.12306.cn/otn/leftTicket/init"
+  });
+
+  var options = {
+    url: url
+    ,method: "POST"
+    ,headers: headers
+    ,form: data
+  };
+
+  return new Promise((resolve, reject)=> {
+    req(options, (error, response, body)=> {
+      if(error) throw error;
+
+      if(response.statusCode === 200) {
+        return resolve(JSON.parse(body));
+      }
+      reject(response.statusMessage);
+    });
+  });
+}
+
 function submitOrderRequest(secretStr) {
   var url = "https://kyfw.12306.cn/otn/leftTicket/submitOrderRequest";
 
   var data = {
     "secretStr": secretStr
-    ,"train_date": "2018-01-29"
+    ,"train_date": "2018-01-31"
     ,"back_train_date": "2018-01-26"
     ,"tour_flag": "dc"
     ,"purpose_codes": "ADULT"
@@ -440,26 +498,51 @@ function submitOrderRequest(secretStr) {
   });
 }
 
-// login().then(queryLeftTicket)
-queryLeftTicket()
-.then((trainsData)=> {
-  //console.log(trainsData);
-  var trains = trainsData.result;
+var subjectQuery = new Rx.Subject();
 
-  console.log("查询到火车数量 "+trains.length);
+subjectQuery.subscribe(x => {
 
-  trains.forEach(function(train) {
-    train = train.split("|");
-    if(train[29] > 0 && train[29] != "无" && train[29] != "0") {
-      console.log(train[3]);
-      if(train[3] == "K372") {
-        submitOrderRequest(train[0])
+  queryLeftTicket().then(trainsData => {
+    //console.log(trainsData);
+    var trains = trainsData.result;
+
+    console.log("查询到火车数量 "+trains.length);
+
+    trains.forEach(function(train) {
+      train = train.split("|");
+      if(train[29] > 0 && train[29] != "无" && train[29] != "0") {
+        console.log(train[3]);
+        if(train[3] == "K850") {
+          checkUser().then(()=> {
+            submitOrderRequest(train[0]);
+          },error => {
+            console.error("Check user error " + error);
+          });
+        }
       }
-    }
+    });
+  }, err => {
+    console.error(err);
+    setTimeout(()=> {
+      subjectQuery.next();
+    }, 1500);
+
   });
-}, (err)=> {
-  console.error(err);
+
 });
+
+login().then(leftTicketInit)
+.then(()=> {
+  subjectQuery.next();
+}, error=> {
+  console.error(error);
+})
+.catch(error=> {
+  console.error(error);
+})
+
+
+// login().
 
 // getPassengers("646e4784223f4f849716c9a5ac96716f0608");
 
