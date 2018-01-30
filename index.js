@@ -7,6 +7,13 @@ const tough = require('tough-cookie');
 const FileCookieStore = require('tough-cookie-store');
 const Rx = require('@reactivex/rxjs');
 
+const ACCOUNT = {
+  "username": "anypossiblew"
+  ,"password": "String0int"
+};
+
+const TRAIN_DATE = "2018-01-31";
+
 // const getPassengers =  require('./passenger');
 
 var fileStore = new FileCookieStore("./cookies.json", {encrypt: false});
@@ -24,7 +31,30 @@ const headers = {
   ,"Referer": "https://kyfw.12306.cn/otn/passport?redirect=/otn/"
 };
 
+// 授权认证
+var subjectAuth = new Rx.Subject();
+// 授权成功
+var subjectAuthenticated = new Rx.Subject();
+// Captcha
+var subjectCaptcha = new Rx.Subject();
+
 function login() {
+
+  subjectCaptcha.subscribe(x=> {
+    captcha().then(checkCaptcha)
+      .then(()=> {
+        // 校验码成功后进行授权认证
+        subjectAuth.next();
+      }, error=> {
+        // 校验失败，重新校验
+        subjectCaptcha.next();
+      });
+  });
+
+  subjectAuth.subscribe(()=> {
+    authenticate().then(uamtk=>subjectAuthenticated.next(uamtk),
+      error=>subjectAuth.next());
+  });
 
   var url = "https://kyfw.12306.cn/otn/login/init";
   var options = {
@@ -32,79 +62,55 @@ function login() {
     headers: headers
   };
 
-  // Continuous call authenticate util success!
-  var auth = function() {
-    console.log("Authenticating ...");
-    authenticate().then((uamtk) => {
-      console.log("uamtk = " + uamtk);
-      return uamtk;
-    }, (reseaon) => {
-      if(reseaon.result_code == 5) {
-        return captcha().then(checkCaptcha).then(auth);
-      }else {
-        auth();
-      }
-    })
-    .catch((error) => {
-      console.error("错误！" + error);
-    });
-  };
-
   return new Promise((resolve, reject)=> {
 
     req(options, (error, response, body) => {
 
       checkAuthentication(cookiejar._jar.toJSON().cookies).then((uamtk)=> {
-        getNewAppToken().then((newapptk)=> {
-          console.log("This is newapptk " + newapptk);
+        // TODO Cookie存在uamtk则拿来进行认证，应该直接校验登录
+        getMy12306().then(resolve, reject);
+      }, error=> {
+          // 验证认证失败，重新认证
+          subjectCaptcha.next();
+        });
+    });
 
+    subjectAuthenticated.subscribe(x=> {
+      getNewAppToken().then((newapptk)=> {
+          console.log("This is newapptk " + newapptk);
           getAppTokenPromise(newapptk).then(getMy12306).then(()=> {
             resolve();
           });
         }, (response)=> {
           console.error("getNewAppToken error "+response.statusCode);
-          captcha().then(checkCaptcha).then(auth, checkCaptcha);
+          // 重新认证
+          subjectCaptcha.next();
         });
-      }, ()=> {
-        return captcha().then(checkCaptcha).then(auth, checkCaptcha);
-      });
-
-      // .then((uamtk) => {
-      //
-      // })
-      // .catch((error) => {
-      //   console.error("遇见错误退出！" + error);
-      // });
     });
   });
-  // .then(()=> {
-  //   console.log(cookiejar._jar.toJSON().cookies);
-  // })
-
-    // .then(captcha)
-    // .then(checkCaptcha)
-    // .then(auth)
-    // .then((uamtk) => {
-    //   console.log(cookiejar.toJSON());
-    // })
-    // .catch((error) => {
-    //   console.error("遇见错误退出！" + error);
-    // });
 }
 
 /**
  * Check authenticattion
  */
 function checkAuthentication(cookies) {
-  return new Promise((resolve, reject) => {
-    for(var i = 0; i < cookies.length; i++) {
-      //
-      if(cookies[i].key == "uamtk") {
-        return resolve(cookies[i].value);
-      }
+  var uamtk = "", tk = "";
+  for(var i = 0; i < cookies.length; i++) {
+    if(cookies[i].key == "uamtk") {
+      uamtk = cookies[i].value;
     }
-    reject();
-  });
+
+    if(cookies[i].key == "tk") {
+      tk = cookies[i].value;
+    }
+  }
+
+  if(tk) {
+    return getAppToken(tk);
+  }else if(uamtk) {
+    return getNewAppToken().then(getAppToken);
+  }
+  return Promise.reject();
 }
 
 function captcha() {
@@ -190,11 +196,9 @@ function checkCaptcha() {
 
 function authenticate() {
   // 发送登录信息
-  var data = {
-        "username": "anypossiblew",
-        "password": "String0int",
+  var data = Object.assign({
         "appid": "otn"
-    };
+      }, ACCOUNT);
 
   var url = "https://kyfw.12306.cn/passport/web/login";
 
@@ -274,12 +278,12 @@ function getMy12306() {
          ,headers: headers
          ,method: "GET"}, (error, response, body)=> {
       if(response.statusCode === 200) {
+        console.log("Got my 12306");
         return resolve();
       }
       reject();
     });
   });
-
 }
 
 /**
@@ -339,8 +343,6 @@ function getAppTokenPromise(newapptk) {
   });
 }
 
-
-
 function getPassengers(token) {
   var url = "https://kyfw.12306.cn/otn/confirmPassenger/getPassengerDTOs";
 
@@ -373,9 +375,24 @@ function getPassengers(token) {
   });
 }
 
+function leftTicketInit() {
+  var url = "https://kyfw.12306.cn/otn/leftTicket/init";
+
+  return new Promise((resolve, reject)=> {
+    req(url, (error, response, body)=> {
+      if(error) throw error;
+
+      if(response.statusCode === 200) {
+        return resolve();
+      }
+      reject(response.statusText);
+    });
+  });
+}
+
 function queryLeftTicket() {
   var query = {
-    "leftTicketDTO.train_date": "2018-01-31"
+    "leftTicketDTO.train_date": TRAIN_DATE
     ,"leftTicketDTO.from_station":"SHH"
     ,"leftTicketDTO.to_station":"UUH"
     ,"purpose_codes": "ADULT"
@@ -400,6 +417,7 @@ function queryLeftTicket() {
           try {
             var data = JSON.parse(body).data;
           }catch(err) {
+            console.log(body);
             reject(err);
           }
           resolve(data);
@@ -413,21 +431,7 @@ function queryLeftTicket() {
 
 }
 
-function leftTicketInit() {
-  var url = "https://kyfw.12306.cn/otn/leftTicket/init";
-
-  return new Promise((resolve, reject)=> {
-    req(url, (error, response, body)=> {
-      if(error) throw error;
-
-      if(response.statusCode === 200) {
-        return resolve();
-      }
-      reject(response.statusText);
-    });
-  });
-}
-
+var sjSmOReqCheckUser = new Rx.Subject();
 function checkUser() {
   var url = "https://kyfw.12306.cn/otn/login/checkUser";
 
@@ -435,15 +439,14 @@ function checkUser() {
     "_json_att": ""
   };
 
-  var headers = Object.assign({}, headers);
-  headers = Object.assign(headers, {
-    "Referer": "https://kyfw.12306.cn/otn/leftTicket/init"
-  });
-
   var options = {
     url: url
     ,method: "POST"
-    ,headers: headers
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "If-Modified-Since": "0"
+      ,"Cache-Control": "no-cache"
+      ,"Referer": "https://kyfw.12306.cn/otn/leftTicket/init"
+    })
     ,form: data
   };
 
@@ -452,48 +455,55 @@ function checkUser() {
       if(error) throw error;
 
       if(response.statusCode === 200) {
-        return resolve(JSON.parse(body));
+        body = JSON.parse(body)
+        if(body.data.flag) {
+          return resolve();
+        }
+        return reject(body);
       }
       reject(response.statusMessage);
     });
   });
 }
 
+var sjSmOReqSubmit = new Rx.Subject();
 function submitOrderRequest(secretStr) {
   var url = "https://kyfw.12306.cn/otn/leftTicket/submitOrderRequest";
 
   var data = {
     "secretStr": secretStr
-    ,"train_date": "2018-01-31"
-    ,"back_train_date": "2018-01-26"
+    ,"train_date": TRAIN_DATE
+    ,"back_train_date": "2018-01-30"
     ,"tour_flag": "dc"
     ,"purpose_codes": "ADULT"
     ,"query_from_station_name": "上海"
     ,"query_to_station_name": "徐州东"
+    ,"undefined":""
   };
 
-  var headers = Object.assign({}, headers);
-  headers = Object.assign(headers, {
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-    ,"Host": "kyfw.12306.cn"
-    ,"Origin": "https://kyfw.12306.cn"
-    ,"Referer": "https://kyfw.12306.cn/otn/leftTicket/init"
-  });
-
+  // url = url + "secretStr="+secretStr+"&train_date=2018-01-31&back_train_date=2018-01-30&tour_flag=dc&purpose_codes=ADULT&query_from_station_name=上海&query_to_station_name=徐州东&undefined";
   var options = {
     url: url
     ,method: "POST"
-    ,headers: headers
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "If-Modified-Since": "0"
+      ,"Cache-Control": "no-cache"
+      ,"Referer": "https://kyfw.12306.cn/otn/leftTicket/init"
+    })
     ,form: data
   };
 
   return new Promise((resolve, reject)=> {
     req(options, (error, response, body)=> {
       if(error) throw error;
-      console.log(response.statusCode);
       if(response.statusCode === 200) {
-        console.log(body)
+        body = JSON.parse(body);
+        if(body.status) {
+          return resolve(body);
+        }
+        return reject(body.messages[0]);
       }
+      reject(response.statusCode);
     });
   });
 }
@@ -510,14 +520,12 @@ subjectQuery.subscribe(x => {
 
     trains.forEach(function(train) {
       train = train.split("|");
+
       if(train[29] > 0 && train[29] != "无" && train[29] != "0") {
         console.log(train[3]);
-        if(train[3] == "K850") {
-          checkUser().then(()=> {
-            submitOrderRequest(train[0]);
-          },error => {
-            console.error("Check user error " + error);
-          });
+        if(train[3] == "K188") {
+          console.log(train);
+          sjSmOReqCheckUser.next(train[0]);
         }
       }
     });
@@ -530,6 +538,20 @@ subjectQuery.subscribe(x => {
   });
 
 });
+
+sjSmOReqCheckUser.subscribe(train=> {
+  checkUser().then(()=>sjSmOReqSubmit.next(train), error => {
+    console.error("Check user error " + error);
+    sjSmOReqCheckUser.next(train);
+  });
+});
+
+sjSmOReqSubmit.subscribe(train=>
+  submitOrderRequest(train).then(()=> console.log("Submit Order Request success!"), error=> {
+    console.error("SubmitOrderRequest error " + error);
+    sjSmOReqSubmit.next(train);
+  })
+);
 
 login().then(leftTicketInit)
 .then(()=> {
