@@ -563,14 +563,14 @@ function getPassengers(token) {
 
 }
 
-function checkOrderInfo(submitToken, ) {
+function checkOrderInfo(submitToken, passengers) {
   var url = "https://kyfw.12306.cn/otn/confirmPassenger/checkOrderInfo";
 
   var data = {
     "cancel_flag": 2
     ,"bed_level_order_num": "000000000000000000000000000000"
-    ,"passengerTicketStr": "O,0,1,王体武,1,372925198902086316,15990911386,N"
-    ,"oldPassengerStr": "王体武,1,372925198902086316,1_"
+    ,"passengerTicketStr": getPassengerTickets(passengers)
+    ,"oldPassengerStr": getOldPassengers()
     ,"tour_flag": "dc"
     ,"randCode": ""
     ,"whatsSelect":1
@@ -578,6 +578,28 @@ function checkOrderInfo(submitToken, ) {
     ,"REPEAT_SUBMIT_TOKEN": submitToken
   };
 
+  var options = {
+    url: url
+    ,method: "POST"
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "Referer": "https://kyfw.12306.cn/otn/confirmPassenger/initDc"
+    })
+    ,form: data
+  };
+
+  return new Promise((resolve, reject)=> {
+    req(options, (error, response, body)=> {
+      if(error) throw error;
+
+      if(response.statusCode === 200) {
+        if(response.headers["Content-Type"].indexOf("application/json") > -1) {
+          return resolve(JSON.parse(body));
+        }
+      }
+
+      reject(response.statusMessage);
+    });
+  });
 
 }
 
@@ -634,7 +656,10 @@ sjInitDc.subscribe(train=> {
   confirmPassengerInitDc().then(submitToken=> {
     console.log("confirmPassenger Init Dc success! "+submitToken);
     getPassengers(submitToken).then(x=> {
-
+      checkOrderInfo(submitToken, x.data.normal_passengers)
+        .then(x=> {
+          console.log(x);
+        }, error=> console.error(error));
     }, error=> console.error(error));
   }, error=> {
     if(error == SYSTEM_BUSSY) {
@@ -667,6 +692,23 @@ function getPassengerTickets(passengers) {
   });
 
   return tickets.join("_");
+}
+
+function getOldPassengers(passengers) {
+  var tickets = [];
+  passengers.forEach(passenger=> {
+    if(PLAN_PEPOLES.includes(passenger.passenger_name)) {
+      //name,身份类型,身份证,1_
+      var ticket =
+              passenger.passenger_name + "," +
+              passenger.passenger_id_type_code + "," +
+              passenger.passenger_id_no + "," +
+              "1";
+      tickets.push(ticket);
+    }
+  });
+
+  return tickets.join("_")+"_";
 }
 
 // var data = {
