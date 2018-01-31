@@ -523,8 +523,8 @@ function confirmPassengerInitDc() {
           if(token) {
             return resolve({
               token: token[1]
-              ,ticketInfo: ticketInfoForPassengerForm&&JSON.parse(ticketInfoForPassengerForm[1])
-              ,orderRequest: orderRequestDTO&&JSON.parse(orderRequestDTO[1])
+              ,ticketInfo: ticketInfoForPassengerForm&&JSON.parse(ticketInfoForPassengerForm[1].replace(/'/g, "\""))
+              ,orderRequest: orderRequestDTO&&JSON.parse(orderRequestDTO[1].replace(/'/g, "\""))
             });
           }
         }
@@ -609,21 +609,147 @@ function checkOrderInfo(submitToken, passengers) {
 
 }
 
-function getQueueCount(token, train) {
+function getQueueCount(token, orderRequestDTO, ticketInfo) {
   var url = "https://kyfw.12306.cn/otn/confirmPassenger/getQueueCount";
   var data = {
-    "train_date": new Date(TRAIN_DATE).toString()
-    ,"train_no": train[2]
-    ,"stationTrainCode": train[3]
+    "train_date": new Date(orderRequestDTO.train_date.time).toString()
+    ,"train_no": orderRequestDTO.train_no
+    ,"stationTrainCode": orderRequestDTO.station_train_code
     ,"seatType":1
-    ,"fromStationTelecode": train[6]
-    ,"toStationTelecode": train[7]
-    ,"leftTicket": querystring.unescape(train[12])
+    ,"fromStationTelecode": orderRequestDTO.from_station_telecode
+    ,"toStationTelecode": orderRequestDTO.to_station_telecode
+    ,"leftTicket": ticketInfo.queryLeftTicketRequestDTO.ypInfoDetail
     ,"purpose_codes": "00"
-    ,"train_location": "HZ"
+    ,"train_location": ticketInfo.train_location
     ,"_json_att": ""
     ,"REPEAT_SUBMIT_TOKEN": token
-  }
+  };
+
+  var options = {
+    url: url
+    ,method: "POST"
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "Referer": "https://kyfw.12306.cn/otn/confirmPassenger/initDc"
+    })
+    ,form: data
+  };
+
+  return new Promise((resolve, reject)=> {
+    req(options, (error, response, body)=> {
+      if(error) throw error;
+
+      if(response.statusCode === 200) {
+        if((response.headers["content-type"] || response.headers["Content-Type"]).indexOf("application/json") > -1) {
+          return resolve(JSON.parse(body));
+        }
+      }
+
+      reject(response.statusMessage);
+    })
+  })
+}
+
+function getPassCodeNew() {
+  var url = "https://kyfw.12306.cn/otn/passcodeNew/getPassCodeNew?module=passenger&rand=randp&"+Math.random(0,1);
+  var options = {
+    url: url
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "Referer": "https://kyfw.12306.cn/otn/confirmPassenger/initDc"
+    })
+  };
+
+  return new Promise((resolve, reject)=> {
+    req(options, (error, response, body)=> {
+      if(error) throw error;
+      if(response.statusCode!==200) reject(response.statusMessage);
+    }).pipe(fs.createWriteStream("captcha.BMP")).on('close', function(){
+      resolve();
+    });
+  });
+
+}
+
+function checkRandCodeAnsyn() {
+  var url = "https://kyfw.12306.cn/otn/passcodeNew/checkRandCodeAnsyn";
+  var data = {
+    randCode: "",
+    rand: "randp"
+  };
+  var options = {
+    url: url
+    ,method: "POST"
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "Referer": "https://kyfw.12306.cn/otn/confirmPassenger/initDc"
+    })
+    ,form: data
+  };
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise((resolve, reject)=> {
+    rl.question('Please input randcode:', (positions) => {
+      rl.close();
+
+      options.form.randCode = positions;
+      req(options, (error, response, body)=> {
+        if(error) throw error;
+
+        if(response.statusCode === 200) {
+          if((response.headers["content-type"] || response.headers["Content-Type"]).indexOf("application/json") > -1) {
+            return resolve(JSON.parse(body));
+          }
+        }
+
+        reject(response.statusMessage);
+      })
+    });
+  })
+}
+
+function confirmSingleForQueue(token, passengers, ticketInfoForPassengerForm) {
+  var url = "https://kyfw.12306.cn/otn/confirmPassenger/confirmSingleForQueue";
+  var data = {
+    "passengerTicketStr": getPassengerTickets(passengers)
+    ,"oldPassengerStr": getOldPassengers(passengers)
+    ,"randCode":""
+    ,"purpose_codes": ticketInfoForPassengerForm.purpose_codes
+    ,"key_check_isChange": ticketInfoForPassengerForm.key_check_isChange
+    ,"leftTicketStr": ticketInfoForPassengerForm.leftTicketStr
+    ,"train_location": ticketInfoForPassengerForm.train_location
+    ,"choose_seats": ""
+    ,"seatDetailType": "000"
+    ,"whatsSelect": 1
+    ,"roomType": "00"
+    ,"dwAll": "N"
+    ,"_json_att": ""
+    ,"REPEAT_SUBMIT_TOKEN": token
+  };
+
+  var options = {
+    url: url
+    ,method: "POST"
+    ,headers: Object.assign(Object.assign({}, headers), {
+      "Referer": "https://kyfw.12306.cn/otn/confirmPassenger/initDc"
+    })
+    ,form: data
+  };
+
+  return new Promise((resolve, reject)=> {
+    req(options, (error, response, body)=> {
+      if(error) throw error;
+
+      if(response.statusCode === 200) {
+        if((response.headers["content-type"] || response.headers["Content-Type"]).indexOf("application/json") > -1) {
+          return resolve(JSON.parse(body));
+        }
+      }
+
+      reject(response.statusMessage);
+    })
+  })
 }
 
 // 查询火车余票
@@ -682,10 +808,29 @@ sjInitDc.subscribe(train=> {
   confirmPassengerInitDc().then((orderRequest)=> {
     console.log("confirmPassenger Init Dc success! "+orderRequest.token);
     // console.log(orderRequest.ticketInfo);
-    getPassengers(orderRequest.token).then(x=> {
-      checkOrderInfo(orderRequest.token, x.data.normal_passengers)
-        .then(x=> {
-          console.log(x);
+    getPassengers(orderRequest.token).then(passengers=> {
+      checkOrderInfo(orderRequest.token, passengers.data.normal_passengers)
+        .then(orderInfo=> {
+          console.log(orderInfo);
+          getQueueCount(orderRequest.token, orderRequest.orderRequest, orderRequest.ticketInfo)
+            .then(x=> {
+              console.log(x);
+              if(orderInfo.data.ifShowPassCode == "Y") {
+                getPassCodeNew().then(checkRandCodeAnsyn)
+                  .then(x=> {
+                    console.log(x);
+                    confirmSingleForQueue(orderRequest.token, passengers.data.normal_passengers, orderRequest.ticketInfo)
+                      .then(x=>{
+                        console.log(x);
+                      },error=>console.error(error))
+                  },error=>console.error(error));
+              }else {
+                confirmSingleForQueue(orderRequest.token, passengers.data.normal_passengers, orderRequest.ticketInfo)
+                  .then(x=>{
+                    console.log(x);
+                  },error=>console.error(error))
+              }
+            }, error=> console.error(error))
         }, error=> console.error(error));
     }, error=> console.error(error))
     .catch(error=> console.error(error));
