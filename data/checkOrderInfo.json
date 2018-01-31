@@ -1,0 +1,14 @@
+{ validateMessagesShowId: '_validatorMessage',
+  status: true,
+  httpstatus: 200,
+  data:
+   { ifShowPassCode: 'N',
+     canChooseBeds: 'N',
+     canChooseSeats: 'Y',
+     choose_Seats: 'O9M',
+     isCanChooseMid: 'N',
+     ifShowPassCodeTime: '1919',
+     submitStatus: true,
+     smokeStr: '' },
+  messages: [],
+  validateMessages: {} }

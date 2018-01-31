@@ -8,11 +8,11 @@ const FileCookieStore = require('tough-cookie-store');
 const Rx = require('@reactivex/rxjs');
 
 const ACCOUNT = {
-  "username": "anypossiblew"
-  ,"password": "String0int"
+  "username": "xxxxxxxxxxxxxx"
+  ,"password": "xxxxxxxxxxx"
 };
 
-const TRAIN_DATE = "2018-01-31";
+const TRAIN_DATE = "2018-02-01";
 const BACK_TRAIN_DATE = "2018-01-31";
 const PLAN_TRAINS = ["G150", "G152", "G216", "G24", "G1940", "G44", "G298", "G1826", "G7600", "G7176", "G7590", "G368", "G7178", "G7300"];
 const PLAN_PEPOLES = ["王体文"];
@@ -518,8 +518,14 @@ function confirmPassengerInitDc() {
         if(body) {
           // Get Repeat Submit Token
           var token = body.match(/var globalRepeatSubmitToken = '(.*?)';/);
+          var ticketInfoForPassengerForm = body.match(/var ticketInfoForPassengerForm=(.*?);/);
+          var orderRequestDTO = body.match(/var orderRequestDTO=(.*?);/);
           if(token) {
-            return resolve(token[1]);
+            return resolve({
+              token: token[1]
+              ,ticketInfo: ticketInfoForPassengerForm&&JSON.parse(ticketInfoForPassengerForm[1])
+              ,orderRequest: orderRequestDTO&&JSON.parse(orderRequestDTO[1])
+            });
           }
         }
         return reject(SYSTEM_BUSSY);
@@ -552,7 +558,7 @@ function getPassengers(token) {
       if(error) throw error;
 
       if(response.statusCode === 200) {
-        if(response.headers["Content-Type"].indexOf("application/json") > -1) {
+        if((response.headers["content-type"] || response.headers["Content-Type"]).indexOf("application/json") > -1) {
           return resolve(JSON.parse(body));
         }
       }
@@ -570,7 +576,7 @@ function checkOrderInfo(submitToken, passengers) {
     "cancel_flag": 2
     ,"bed_level_order_num": "000000000000000000000000000000"
     ,"passengerTicketStr": getPassengerTickets(passengers)
-    ,"oldPassengerStr": getOldPassengers()
+    ,"oldPassengerStr": getOldPassengers(passengers)
     ,"tour_flag": "dc"
     ,"randCode": ""
     ,"whatsSelect":1
@@ -592,7 +598,7 @@ function checkOrderInfo(submitToken, passengers) {
       if(error) throw error;
 
       if(response.statusCode === 200) {
-        if(response.headers["Content-Type"].indexOf("application/json") > -1) {
+        if((response.headers["content-type"] || response.headers["Content-Type"]).indexOf("application/json") > -1) {
           return resolve(JSON.parse(body));
         }
       }
@@ -601,6 +607,23 @@ function checkOrderInfo(submitToken, passengers) {
     });
   });
 
+}
+
+function getQueueCount(token, train) {
+  var url = "https://kyfw.12306.cn/otn/confirmPassenger/getQueueCount";
+  var data = {
+    "train_date": new Date(TRAIN_DATE).toString()
+    ,"train_no": train[2]
+    ,"stationTrainCode": train[3]
+    ,"seatType":1
+    ,"fromStationTelecode": train[6]
+    ,"toStationTelecode": train[7]
+    ,"leftTicket": querystring.unescape(train[12])
+    ,"purpose_codes": "00"
+    ,"train_location": "HZ"
+    ,"_json_att": ""
+    ,"REPEAT_SUBMIT_TOKEN": token
+  }
 }
 
 // 查询火车余票
@@ -624,7 +647,10 @@ subjectQuery.subscribe(x => {
       }
     });
 
-    sjSmOReqCheckUser.next(planTrain[0]);
+    if(planTrain) {
+      sjSmOReqCheckUser.next(planTrain[0]);
+    }
+
   }, err => {
     console.error(err);
     setTimeout(()=> {
@@ -653,14 +679,16 @@ sjSmOReqSubmit.subscribe(train=>
 );
 
 sjInitDc.subscribe(train=> {
-  confirmPassengerInitDc().then(submitToken=> {
-    console.log("confirmPassenger Init Dc success! "+submitToken);
-    getPassengers(submitToken).then(x=> {
-      checkOrderInfo(submitToken, x.data.normal_passengers)
+  confirmPassengerInitDc().then((orderRequest)=> {
+    console.log("confirmPassenger Init Dc success! "+orderRequest.token);
+    // console.log(orderRequest.ticketInfo);
+    getPassengers(orderRequest.token).then(x=> {
+      checkOrderInfo(orderRequest.token, x.data.normal_passengers)
         .then(x=> {
           console.log(x);
         }, error=> console.error(error));
-    }, error=> console.error(error));
+    }, error=> console.error(error))
+    .catch(error=> console.error(error));
   }, error=> {
     if(error == SYSTEM_BUSSY) {
       console.log(error);
@@ -671,9 +699,15 @@ sjInitDc.subscribe(train=> {
     }else {
       console.error(error);
     }
-  })
+  }).catch(error=> console.error(error));
 });
 
+/* seat type
+‘软卧’ => ‘4’,
+‘二等座’ => ‘O’,
+‘一等座’ => ‘M’,
+‘硬座’ => ‘1’,
+ */
 function getPassengerTickets(passengers) {
   var tickets = [];
   passengers.forEach(passenger=> {
